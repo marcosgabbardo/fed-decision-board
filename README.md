@@ -8,6 +8,8 @@
 
 Fed Decision Board is a multi-agent system that simulates Federal Open Market Committee (FOMC) meetings. Each agent represents a real Fed member with a persona based on their historical voting profile, policy preferences, and communication style. The system generates interest rate decision forecasts and meeting minutes in the official Fed format.
 
+![Dot Plot Example](docs/dotplot-example.png)
+
 ---
 
 ## Table of Contents
@@ -33,17 +35,27 @@ Fed Decision Board is a multi-agent system that simulates Federal Open Market Co
 
 ## Features
 
+### Core Simulation
 - **12 FOMC Member Agents** — Realistic personas for all voting members with hawk/dove/neutral stances
 - **Economic Data Integration** — Real-time data from FRED API (20+ economic indicators)
 - **Trend Analysis** — Visual trend indicators (↑↓→) with historical values for context
-- **Official-Format Minutes** — Meeting minutes in Markdown and PDF matching Fed's style
-- **Dot Plot Projections** — Generate rate projection charts like the Fed's Summary of Economic Projections
-- **Press Conference Simulation** — Q&A session with the Chair after decisions
-- **Dissent Analysis** — Detailed analysis when members vote against the majority
-- **Market Impact Estimates** — Projected effects on yields, equities, and currency
-- **Hawk-Dove Tracker** — Historical stance tracking for each member
-- **Cost Transparency** — Estimate API costs before running simulations
 - **Smart Caching** — FRED API responses cached to minimize redundant calls
+
+### Outputs
+- **Official-Format Minutes** — Meeting minutes in Markdown and PDF matching Fed's official style
+- **Dot Plot Projections** — Rate projection charts like the Fed's Summary of Economic Projections
+- **Detailed Vote Analysis** — Individual member votes with reasoning, key factors, and confidence levels
+
+### Analytics
+- **Hawk-Dove Tracker** — Historical stance scoring for each member (-100 to +100 scale)
+- **Dissent Analysis** — Track and analyze when members vote against the majority
+- **Market Impact Estimates** — Projected effects on yields, equities, and currency
+- **Simulation Accuracy** — Compare simulations against actual Fed decisions
+
+### Operations
+- **Cost Transparency** — Estimate API costs before running simulations
+- **CSV Export** — Export simulation history and vote data for analysis
+- **Concurrency Control** — Sequential or parallel API calls to manage rate limits
 
 ---
 
@@ -372,12 +384,18 @@ xdg-open data/minutes/2025-01.pdf
 |---------|-------------|---------|
 | `simulate` | Run FOMC meeting simulation | `uv run fed-board simulate --month 2025-01` |
 | `estimate` | Preview simulation cost without running | `uv run fed-board estimate --year 2025` |
-| `minutes` | Generate meeting minutes | `uv run fed-board minutes --month 2025-01 --format pdf` |
+| `minutes` | Generate meeting minutes (MD/PDF) | `uv run fed-board minutes --month 2025-01 --format pdf` |
 | `dotplot` | Create rate projection dot plot | `uv run fed-board dotplot --year 2025` |
-| `stance` | View hawk-dove positioning | `uv run fed-board stance --all` |
-| `cache clear` | Clear FRED API cache | `uv run fed-board cache clear` |
-| `cache stats` | View cache statistics | `uv run fed-board cache stats` |
-| `config show` | Display current configuration | `uv run fed-board config show` |
+| `votes` | Show detailed voting with reasoning | `uv run fed-board votes --month 2025-01` |
+| `stance` | View hawk-dove positioning tracker | `uv run fed-board stance` |
+| `dissents` | Analyze dissenting votes | `uv run fed-board dissents` |
+| `impact` | Display market impact estimates | `uv run fed-board impact --month 2025-01` |
+| `changes` | Show economic indicator changes | `uv run fed-board changes --month 2025-01` |
+| `compare` | Compare simulation vs actual Fed decision | `uv run fed-board compare --month 2025-01` |
+| `history` | View simulation history | `uv run fed-board history` |
+| `members` | List all FOMC members | `uv run fed-board members` |
+| `cache` | Manage FRED API cache | `uv run fed-board cache stats` |
+| `config` | Display current configuration | `uv run fed-board config show` |
 
 ### Detailed Command Usage
 
@@ -446,17 +464,155 @@ uv run fed-board cache stats
 uv run fed-board cache clear
 ```
 
-**Cache stats output:**
+#### votes
+
+Show detailed voting information with reasoning for each member:
+
+```bash
+# All votes with full reasoning
+uv run fed-board votes --month 2025-01
+
+# Brief mode (no reasoning)
+uv run fed-board votes --month 2025-01 --brief
+
+# Filter by member
+uv run fed-board votes --month 2025-01 --member powell
 ```
-╭────────────────────────────── FRED Cache ────────────────────────────────╮
-│ Cache Statistics                                                         │
-│                                                                          │
-│ Directory: data/cache/fred                                               │
-│ Total files: 45                                                          │
-│ Total size: 128.5 KB                                                     │
-│ Valid entries: 42                                                        │
-│ Expired entries: 3                                                       │
-╰──────────────────────────────────────────────────────────────────────────╯
+
+**Example output:**
+```
+╭─────────────────────────── FOMC Meeting — 2025-01 ───────────────────────────╮
+│ Decision: HOLD                                                               │
+│ Rate: 4.25-4.50% → 4.25-4.50%                                                │
+│ Vote: Unanimous (12-0)                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Jerome H. Powell (Chair)
+  Stance: Neutral  |  Vote: FOR  |  Preferred: Hold
+  Confidence: ████████░░ 85%
+  Key Factors:
+    • Core PCE inflation at 2.8% showing continued progress
+    • Wage growth acceleration to 3.8% moving in concerning direction
+    • GDP growth at 4.3% demonstrating economic resilience
+  Reasoning:
+    The data support a patient, data-dependent approach. Core PCE at
+    2.8% shows meaningful progress toward our 2% target...
+```
+
+#### stance
+
+Track hawk-dove positioning across simulations:
+
+```bash
+# All members
+uv run fed-board stance
+
+# Specific member with history
+uv run fed-board stance --member bowman
+
+# Filter by year
+uv run fed-board stance --year 2025
+```
+
+**Example output:**
+```
+╭──────────────────────────── FOMC Stance Tracker ─────────────────────────────╮
+│ Based on 8 simulation(s) (2025-01 to 2025-12)                                │
+│ Score: -100 (dove) to +100 (hawk)                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Member                 ┃ Baseline ┃ Score ┃ Votes ┃ Dissents ┃ Position   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ Michelle W. Bowman     │   Hawk   │   +35 │     8 │        2 │ ███████░░░ │
+│ Christopher J. Waller  │   Hawk   │   +28 │     8 │        1 │ ██████░░░░ │
+│ Jerome H. Powell       │ Neutral  │    +5 │     8 │        0 │ █████░░░░░ │
+│ Austan D. Goolsbee     │   Dove   │   -22 │     8 │        1 │ ████░░░░░░ │
+│ Neel Kashkari          │   Dove   │   -30 │     8 │        2 │ ███░░░░░░░ │
+└────────────────────────┴──────────┴───────┴───────┴──────────┴────────────┘
+```
+
+#### dissents
+
+Analyze dissenting votes across simulations:
+
+```bash
+# All dissents
+uv run fed-board dissents
+
+# Filter by year
+uv run fed-board dissents --year 2025
+
+# Filter by member
+uv run fed-board dissents --member bowman
+```
+
+#### impact
+
+Show estimated market impact of a decision:
+
+```bash
+uv run fed-board impact --month 2025-01
+```
+
+**Example output:**
+```
+╭────────────────────── Market Impact Estimate — 2025-01 ──────────────────────╮
+│ Decision: -25 bps (CUT)                                                      │
+│ Rate: 4.50%-4.75% → 4.25%-4.50%                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━┓
+┃ Asset        ┃ Expected Δ ┃ Direction   ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━┩
+│ S&P 500      │     +1.20% │ ↑ Risk-on   │
+│ 10Y Treasury │    -12 bps │ ↓ Lower     │
+│ 2Y Treasury  │    -18 bps │ ↓ Lower     │
+│ Dollar (DXY) │     -0.50% │ ↓ Weaker    │
+└──────────────┴────────────┴─────────────┘
+```
+
+#### compare
+
+Compare simulation results with actual Fed decisions:
+
+```bash
+uv run fed-board compare --month 2025-01
+```
+
+**Example output:**
+```
+╭────────────────────── Simulation vs Actual — 2025-01 ────────────────────────╮
+│ FOMC Meeting: January 28-29, 2025                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━┓
+┃               ┃ Simulation ┃ Actual     ┃ Match  ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━┩
+│ Direction     │ HOLD       │ HOLD       │   ✓    │
+│ Change (bps)  │ 0          │ 0          │   ✓    │
+│ New Range     │ 4.25-4.50% │ 4.25-4.50% │   ✓    │
+└───────────────┴────────────┴────────────┴────────┘
+
+Accuracy Score: 100%
+```
+
+#### history
+
+View simulation history with optional CSV export:
+
+```bash
+# View history
+uv run fed-board history
+
+# Filter by year
+uv run fed-board history --year 2025
+
+# Export to CSV
+uv run fed-board history --export csv
+
+# Export with detailed vote data
+uv run fed-board history --export csv --detailed --votes
 ```
 
 ---
