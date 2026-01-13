@@ -38,7 +38,7 @@ class FOMCAgent:
     # Class-level semaphore to limit concurrent API calls across all agents
     # This prevents rate limit errors when running many agents in parallel
     _api_semaphore: ClassVar[asyncio.Semaphore | None] = None
-    _max_concurrent_calls: ClassVar[int] = 3  # Max concurrent API calls
+    _max_concurrent_calls: ClassVar[int] = 1  # Sequential by default to avoid rate limits
 
     @classmethod
     def _get_semaphore(cls) -> asyncio.Semaphore:
