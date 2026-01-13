@@ -1,0 +1,350 @@
+"""PDF generator for FOMC meeting minutes."""
+
+from pathlib import Path
+
+from weasyprint import CSS, HTML
+
+from fed_board.config import Settings, get_settings
+from fed_board.models.meeting import MeetingResult
+from fed_board.outputs.minutes import MinutesGenerator
+
+
+# CSS styling to match Fed official documents
+FED_STYLE_CSS = """
+@page {
+    size: letter;
+    margin: 1in;
+    @bottom-center {
+        content: counter(page);
+        font-family: "Times New Roman", Times, serif;
+        font-size: 10pt;
+    }
+}
+
+body {
+    font-family: "Times New Roman", Times, serif;
+    font-size: 12pt;
+    line-height: 1.5;
+    color: #000;
+    max-width: 100%;
+}
+
+h1 {
+    font-size: 16pt;
+    font-weight: bold;
+    text-align: center;
+    margin-top: 0;
+    margin-bottom: 24pt;
+    border-bottom: none;
+}
+
+h2 {
+    font-size: 14pt;
+    font-weight: bold;
+    margin-top: 18pt;
+    margin-bottom: 12pt;
+    border-bottom: none;
+}
+
+h3 {
+    font-size: 12pt;
+    font-weight: bold;
+    margin-top: 12pt;
+    margin-bottom: 6pt;
+}
+
+p {
+    text-align: justify;
+    margin-bottom: 12pt;
+    text-indent: 0.5in;
+}
+
+p:first-of-type {
+    text-indent: 0;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 24pt 0;
+}
+
+ul, ol {
+    margin-left: 0.5in;
+    margin-bottom: 12pt;
+}
+
+li {
+    margin-bottom: 6pt;
+}
+
+strong {
+    font-weight: bold;
+}
+
+em {
+    font-style: italic;
+}
+
+.disclaimer {
+    margin-top: 36pt;
+    padding: 12pt;
+    border: 2px solid #333;
+    background-color: #f5f5f5;
+    font-size: 10pt;
+}
+
+.disclaimer h4 {
+    font-size: 11pt;
+    font-weight: bold;
+    margin-top: 0;
+    color: #c00;
+}
+
+.ai-badge {
+    display: inline-block;
+    background-color: #0066cc;
+    color: white;
+    padding: 2pt 6pt;
+    border-radius: 3pt;
+    font-size: 9pt;
+    font-weight: bold;
+    margin-left: 6pt;
+}
+
+.header-info {
+    text-align: center;
+    margin-bottom: 24pt;
+}
+
+.vote-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12pt 0;
+}
+
+.vote-table th, .vote-table td {
+    border: 1px solid #ccc;
+    padding: 6pt;
+    text-align: left;
+}
+
+.vote-table th {
+    background-color: #f0f0f0;
+    font-weight: bold;
+}
+
+blockquote {
+    margin-left: 0.5in;
+    margin-right: 0.5in;
+    font-style: italic;
+    border-left: 3px solid #ccc;
+    padding-left: 12pt;
+}
+"""
+
+
+class PDFGenerator:
+    """Generates PDF meeting minutes in Fed format."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        """
+        Initialize the PDF generator.
+
+        Args:
+            settings: Application settings
+        """
+        self.settings = settings or get_settings()
+        self.minutes_generator = MinutesGenerator(settings)
+
+    def generate_html(self, result: MeetingResult) -> str:
+        """
+        Generate HTML for PDF conversion.
+
+        Args:
+            result: The meeting result
+
+        Returns:
+            HTML string
+        """
+        meeting = result.meeting
+        decision = result.decision
+
+        # Build vote table
+        vote_rows = ""
+        for vote in result.votes:
+            status = "For" if vote.vote_for_decision else "Against"
+            vote_rows += f"""
+            <tr>
+                <td>{vote.member_name}</td>
+                <td>{status}</td>
+                <td>{vote.preferred_rate:.2f}%</td>
+            </tr>
+            """
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>FOMC Minutes - {meeting.display_date}</title>
+</head>
+<body>
+    <div class="header-info">
+        <h1>Minutes of the Federal Open Market Committee</h1>
+        <p><strong>{meeting.display_date}</strong></p>
+        <span class="ai-badge">AI SIMULATION</span>
+    </div>
+
+    <hr>
+
+    <h2>Summary</h2>
+    <p>
+        The Federal Open Market Committee held a meeting on {meeting.display_date}
+        and voted to {self._get_action_text(decision)} the target range for the federal
+        funds rate to {decision.rate_range_str}.
+    </p>
+
+    <h2>Vote Results</h2>
+    <p><strong>Decision:</strong> {result.vote_summary}</p>
+
+    <table class="vote-table">
+        <thead>
+            <tr>
+                <th>Member</th>
+                <th>Vote</th>
+                <th>Preferred Rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {vote_rows}
+        </tbody>
+    </table>
+
+    <h2>Economic Conditions</h2>
+    {self._format_paragraphs(result.economic_outlook)}
+
+    <h2>Participants' Views</h2>
+    {self._format_paragraphs(result.participants_discussion)}
+
+    <h2>Policy Statement</h2>
+    {self._format_paragraphs(result.statement_summary)}
+
+    {self._format_dissent_section_html(result)}
+
+    <hr>
+
+    <div class="disclaimer">
+        <h4>DISCLAIMER: AI-GENERATED SIMULATION</h4>
+        <p>
+            This document was generated by an AI simulation system and does not
+            represent actual Federal Reserve decisions or policy. The content is
+            for educational and research purposes only.
+        </p>
+        <p><strong>Model Used:</strong> {result.model_used}</p>
+        <p><strong>Generated:</strong> {result.created_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p><em>Fed Decision Board - AI-powered FOMC meeting simulator</em></p>
+    </div>
+</body>
+</html>
+"""
+        return html
+
+    def _get_action_text(self, decision) -> str:
+        """Get action text for the decision."""
+        if decision.rate_change_bps > 0:
+            return "raise"
+        elif decision.rate_change_bps < 0:
+            return "lower"
+        return "maintain"
+
+    def _format_paragraphs(self, text: str) -> str:
+        """Format text into HTML paragraphs."""
+        if not text:
+            return "<p>No information available.</p>"
+
+        paragraphs = text.split("\n\n")
+        html_paragraphs = []
+        for p in paragraphs:
+            p = p.strip()
+            if p:
+                # Handle markdown-style bold
+                p = p.replace("**", "<strong>").replace("</strong><strong>", "</strong>")
+                html_paragraphs.append(f"<p>{p}</p>")
+        return "\n".join(html_paragraphs) if html_paragraphs else "<p>No information available.</p>"
+
+    def _format_dissent_section_html(self, result: MeetingResult) -> str:
+        """Format dissent section as HTML."""
+        if not result.has_dissents:
+            return ""
+
+        html = "<h2>Dissenting Views</h2>\n"
+        for analysis in result.dissent_analyses:
+            html += f"""
+            <p>
+                <strong>{analysis.dissenter_name}</strong> voted against the action,
+                preferring {analysis.dissenter_preference}. {analysis.reasoning}
+            </p>
+            """
+        return html
+
+    def generate_pdf(
+        self,
+        result: MeetingResult,
+        output_path: Path | None = None,
+    ) -> Path:
+        """
+        Generate PDF meeting minutes.
+
+        Args:
+            result: The meeting result
+            output_path: Output path (defaults to settings minutes_dir)
+
+        Returns:
+            Path to the generated PDF
+        """
+        if output_path is None:
+            output_dir = self.settings.minutes_dir
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"{result.meeting.month_str}.pdf"
+
+        html_content = self.generate_html(result)
+        css = CSS(string=FED_STYLE_CSS)
+
+        HTML(string=html_content).write_pdf(
+            output_path,
+            stylesheets=[css],
+        )
+
+        return output_path
+
+    def generate_all_formats(
+        self,
+        result: MeetingResult,
+        output_dir: Path | None = None,
+    ) -> dict[str, Path]:
+        """
+        Generate minutes in all formats (MD and PDF).
+
+        Args:
+            result: The meeting result
+            output_dir: Output directory
+
+        Returns:
+            Dict mapping format to output path
+        """
+        if output_dir is None:
+            output_dir = self.settings.minutes_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        outputs = {}
+
+        # Generate Markdown
+        md_path = self.minutes_generator.save_markdown(result, output_dir)
+        outputs["markdown"] = md_path
+
+        # Generate PDF
+        pdf_path = output_dir / f"{result.meeting.month_str}.pdf"
+        self.generate_pdf(result, pdf_path)
+        outputs["pdf"] = pdf_path
+
+        return outputs
