@@ -826,5 +826,268 @@ def cache_cmd(
         console.print(f"[red]Unknown action: {action}. Use 'clear' or 'stats'.[/red]")
 
 
+@app.command()
+def impact(
+    month: Annotated[
+        Optional[str],
+        typer.Option(
+            "--month",
+            "-m",
+            help="Meeting month (YYYY-MM). Default: most recent simulation.",
+        ),
+    ] = None,
+) -> None:
+    """Display estimated market impact from a simulation."""
+    from fed_board.agents.orchestrator import MeetingOrchestrator
+    from fed_board.config import get_settings
+
+    settings = get_settings()
+    orchestrator = MeetingOrchestrator(settings=settings)
+
+    # Find the most recent simulation if no month specified
+    if month is None:
+        simulations_dir = settings.simulations_dir
+        if not simulations_dir.exists():
+            console.print("[red]No simulations found. Run 'simulate' first.[/red]")
+            raise typer.Exit(1)
+
+        sim_files = sorted(simulations_dir.glob("*.json"), reverse=True)
+        if not sim_files:
+            console.print("[red]No simulations found. Run 'simulate' first.[/red]")
+            raise typer.Exit(1)
+
+        month = sim_files[0].stem  # e.g., "2025-01"
+
+    result = orchestrator.load_result(month)
+    if result is None:
+        console.print(f"[red]No simulation found for {month}. Run 'simulate' first.[/red]")
+        raise typer.Exit(1)
+
+    if result.market_impact is None:
+        console.print(f"[yellow]No market impact data available for {month}.[/yellow]")
+        raise typer.Exit(1)
+
+    impact_data = result.market_impact
+    decision = result.decision
+
+    # Build impact table
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Asset", style="cyan")
+    table.add_column("Expected Δ", justify="right")
+    table.add_column("Direction")
+
+    # S&P 500
+    sp_change = impact_data.sp500_change_pct
+    sp_dir = "[green]▲ Bullish[/green]" if sp_change > 0 else "[red]▼ Bearish[/red]" if sp_change < 0 else "[yellow]→ Neutral[/yellow]"
+    table.add_row("S&P 500", f"{sp_change:+.2f}%", sp_dir)
+
+    # 10Y Treasury
+    t10_change = impact_data.treasury_10y_change_bps
+    t10_dir = "[red]▲ Yields rise[/red]" if t10_change > 0 else "[green]▼ Yields fall[/green]" if t10_change < 0 else "[yellow]→ Unchanged[/yellow]"
+    table.add_row("10Y Treasury", f"{t10_change:+d} bps", t10_dir)
+
+    # 2Y Treasury
+    t2_change = impact_data.treasury_2y_change_bps
+    t2_dir = "[red]▲ Yields rise[/red]" if t2_change > 0 else "[green]▼ Yields fall[/green]" if t2_change < 0 else "[yellow]→ Unchanged[/yellow]"
+    table.add_row("2Y Treasury", f"{t2_change:+d} bps", t2_dir)
+
+    # Dollar Index
+    dxy_change = impact_data.dxy_change_pct
+    dxy_dir = "[cyan]▲ Strengthening[/cyan]" if dxy_change > 0 else "[magenta]▼ Weakening[/magenta]" if dxy_change < 0 else "[yellow]→ Stable[/yellow]"
+    table.add_row("Dollar (DXY)", f"{dxy_change:+.2f}%", dxy_dir)
+
+    # Decision summary
+    if decision.rate_change_bps > 0:
+        decision_str = f"[red]+{decision.rate_change_bps} bps[/red] (RAISE)"
+    elif decision.rate_change_bps < 0:
+        decision_str = f"[green]{decision.rate_change_bps} bps[/green] (CUT)"
+    else:
+        decision_str = "[yellow]0 bps[/yellow] (HOLD)"
+
+    # Print header panel
+    console.print()
+    console.print(Panel(
+        f"[bold]Decision:[/bold] {decision_str}\n"
+        f"[bold]Rate:[/bold] {decision.previous_rate_lower:.2f}%-{decision.previous_rate_upper:.2f}% → {decision.new_rate_lower:.2f}%-{decision.new_rate_upper:.2f}%",
+        title=f"Market Impact Estimate — {month}",
+        border_style="blue",
+    ))
+
+    # Print impact table
+    console.print()
+    console.print(table)
+
+    # Rationale
+    if impact_data.rationale:
+        console.print()
+        console.print(Panel(
+            impact_data.rationale,
+            title="Rationale",
+            border_style="dim",
+        ))
+
+
+@app.command()
+def changes(
+    month: Annotated[
+        Optional[str],
+        typer.Option(
+            "--month",
+            "-m",
+            help="Compare to this simulation (YYYY-MM). Default: most recent.",
+        ),
+    ] = None,
+) -> None:
+    """Show economic indicator changes since a simulation."""
+    from fed_board.agents.orchestrator import MeetingOrchestrator
+    from fed_board.config import get_settings
+    from fed_board.data.fred import FREDClient
+
+    settings = get_settings()
+    orchestrator = MeetingOrchestrator(settings=settings)
+    fred_client = FREDClient(settings=settings)
+
+    # Find the most recent simulation if no month specified
+    if month is None:
+        simulations_dir = settings.simulations_dir
+        if not simulations_dir.exists():
+            console.print("[red]No simulations found. Run 'simulate' first.[/red]")
+            raise typer.Exit(1)
+
+        sim_files = sorted(simulations_dir.glob("*.json"), reverse=True)
+        if not sim_files:
+            console.print("[red]No simulations found. Run 'simulate' first.[/red]")
+            raise typer.Exit(1)
+
+        month = sim_files[0].stem
+
+    result = orchestrator.load_result(month)
+    if result is None:
+        console.print(f"[red]No simulation found for {month}. Run 'simulate' first.[/red]")
+        raise typer.Exit(1)
+
+    if result.economic_indicators is None:
+        console.print(f"[yellow]No economic indicator data available for {month}.[/yellow]")
+        raise typer.Exit(1)
+
+    old_indicators = result.economic_indicators
+
+    # Fetch current indicators
+    console.print("[dim]Fetching current economic data from FRED...[/dim]")
+    try:
+        current_indicators = asyncio.run(fred_client.get_economic_indicators())
+    except Exception as e:
+        console.print(f"[red]Error fetching FRED data: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Calculate days since simulation
+    days_ago = (datetime.now().date() - result.created_at.date()).days
+
+    # Key indicators to compare
+    key_indicators = [
+        ("Core PCE YoY", "inflation", "core_pce_yoy", "pp", False),  # Lower is better
+        ("Unemployment", "employment", "unemployment_rate", "pp", False),  # Lower is better (but watch for too low)
+        ("Fed Funds Rate", "markets", "fed_funds_rate", "pp", None),  # Neutral
+        ("10Y Treasury", "markets", "treasury_10y", "bps", None),  # Neutral
+        ("2Y Treasury", "markets", "treasury_2y", "bps", None),  # Neutral
+        ("S&P 500", "markets", "sp500", "%", True),  # Higher is better
+        ("Consumer Sentiment", "expectations", "consumer_sentiment", "pts", True),  # Higher is better
+    ]
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Indicator", style="cyan")
+    table.add_column("Then", justify="right")
+    table.add_column("Now", justify="right")
+    table.add_column("Change", justify="right")
+    table.add_column("Trend")
+
+    notable_changes = []
+
+    for name, category, field, fmt, higher_is_better in key_indicators:
+        old_cat = getattr(old_indicators, category)
+        new_cat = getattr(current_indicators, category)
+        old_val = getattr(old_cat, field, None)
+        new_val = getattr(new_cat, field, None)
+
+        if old_val is None or new_val is None:
+            continue
+
+        delta = new_val - old_val
+
+        # Format values and delta
+        if fmt == "bps":
+            old_str = f"{old_val:.2f}%"
+            new_str = f"{new_val:.2f}%"
+            delta_bps = delta * 100
+            delta_str = f"{delta_bps:+.0f} bps"
+            is_significant = abs(delta_bps) >= 10
+        elif fmt == "pp":
+            old_str = f"{old_val:.1f}%"
+            new_str = f"{new_val:.1f}%"
+            delta_str = f"{delta:+.2f} pp"
+            is_significant = abs(delta) >= 0.1
+        elif fmt == "%":
+            old_str = f"{old_val:,.0f}"
+            new_str = f"{new_val:,.0f}"
+            pct_change = ((new_val - old_val) / old_val) * 100 if old_val != 0 else 0
+            delta_str = f"{pct_change:+.1f}%"
+            is_significant = abs(pct_change) >= 1
+        else:  # pts
+            old_str = f"{old_val:.1f}"
+            new_str = f"{new_val:.1f}"
+            delta_str = f"{delta:+.1f}"
+            is_significant = abs(delta) >= 1
+
+        # Determine trend arrow and color
+        if delta > 0:
+            trend = "↑"
+            if higher_is_better is True:
+                color = "green"
+            elif higher_is_better is False:
+                color = "red"
+            else:
+                color = "yellow"
+        elif delta < 0:
+            trend = "↓"
+            if higher_is_better is True:
+                color = "red"
+            elif higher_is_better is False:
+                color = "green"
+            else:
+                color = "yellow"
+        else:
+            trend = "→"
+            color = "dim"
+
+        trend_str = f"[{color}]{trend}[/{color}]"
+        delta_colored = f"[{color}]{delta_str}[/{color}]"
+
+        table.add_row(name, old_str, new_str, delta_colored, trend_str)
+
+        # Track notable changes
+        if is_significant:
+            direction = "up" if delta > 0 else "down"
+            notable_changes.append(f"{name} {direction}")
+
+    # Print header
+    console.print()
+    console.print(Panel(
+        f"[bold]Comparing to simulation:[/bold] {month}\n"
+        f"[bold]Simulation date:[/bold] {result.created_at.strftime('%Y-%m-%d')} ({days_ago} days ago)\n"
+        f"[bold]Current data as of:[/bold] {datetime.now().strftime('%Y-%m-%d')}",
+        title="Economic Changes",
+        border_style="cyan",
+    ))
+
+    # Print table
+    console.print()
+    console.print(table)
+
+    # Print notable changes
+    if notable_changes:
+        console.print()
+        console.print(f"[yellow]Notable:[/yellow] {', '.join(notable_changes[:3])}")
+
+
 if __name__ == "__main__":
     app()
