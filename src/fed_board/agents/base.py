@@ -322,6 +322,13 @@ class FOMCAgent:
                 except anthropic.RateLimitError as e:
                     elapsed = time.time() - start_time
                     last_error = e
+                    error_type = "rate_limit"
+                    # Continue to retry logic below
+
+                except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
+                    elapsed = time.time() - start_time
+                    last_error = e
+                    error_type = "timeout"
                     # Continue to retry logic below
 
                 except anthropic.APIError as e:
@@ -329,23 +336,29 @@ class FOMCAgent:
                     logger.error(f"[{self.short_name}] API error after {elapsed:.1f}s: {e}")
                     raise FOMCAgentError(f"API call failed for {self.name}: {e}") from e
 
-            # Outside semaphore block - wait before retrying (only for rate limits)
+            # Outside semaphore block - wait before retrying (for transient errors)
             if last_error is not None:
                 if attempt < max_retries:
                     # Exponential backoff with jitter
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 5)
-                    logger.warning(
-                        f"[{self.short_name}] Rate limit hit after {elapsed:.1f}s. "
-                        f"Retry {attempt + 1}/{max_retries} in {delay:.1f}s..."
-                    )
+                    if error_type == "rate_limit":
+                        logger.warning(
+                            f"[{self.short_name}] Rate limit hit after {elapsed:.1f}s. "
+                            f"Retry {attempt + 1}/{max_retries} in {delay:.1f}s..."
+                        )
+                    else:
+                        logger.warning(
+                            f"[{self.short_name}] Timeout/connection error after {elapsed:.1f}s. "
+                            f"Retry {attempt + 1}/{max_retries} in {delay:.1f}s..."
+                        )
                     await asyncio.sleep(delay)
                     last_error = None  # Reset for next attempt
                 else:
                     logger.error(
-                        f"[{self.short_name}] Rate limit error after {max_retries} retries: {last_error}"
+                        f"[{self.short_name}] API error after {max_retries} retries: {last_error}"
                     )
                     raise FOMCAgentError(
-                        f"API rate limit exceeded for {self.name} after {max_retries} retries: {last_error}"
+                        f"API call failed for {self.name} after {max_retries} retries: {last_error}"
                     ) from last_error
 
         # This shouldn't be reached, but just in case
