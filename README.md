@@ -35,6 +35,7 @@ Fed Decision Board is a multi-agent system that simulates Federal Open Market Co
 
 - **12 FOMC Member Agents** — Realistic personas for all voting members with hawk/dove/neutral stances
 - **Economic Data Integration** — Real-time data from FRED API (20+ economic indicators)
+- **Trend Analysis** — Visual trend indicators (↑↓→) with historical values for context
 - **Official-Format Minutes** — Meeting minutes in Markdown and PDF matching Fed's style
 - **Dot Plot Projections** — Generate rate projection charts like the Fed's Summary of Economic Projections
 - **Press Conference Simulation** — Q&A session with the Chair after decisions
@@ -42,6 +43,7 @@ Fed Decision Board is a multi-agent system that simulates Federal Open Market Co
 - **Market Impact Estimates** — Projected effects on yields, equities, and currency
 - **Hawk-Dove Tracker** — Historical stance tracking for each member
 - **Cost Transparency** — Estimate API costs before running simulations
+- **Smart Caching** — FRED API responses cached to minimize redundant calls
 
 ---
 
@@ -120,7 +122,7 @@ You'll need two API keys:
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/fed-decision-board.git
+git clone https://github.com/marcosgabbardo/fed-decision-board.git
 cd fed-decision-board
 ```
 
@@ -222,25 +224,38 @@ This ensures the correct Python environment and dependencies are used.
 Before running a simulation, check the estimated cost:
 
 ```bash
-uv run fed-board estimate --month 2025-01
+uv run fed-board estimate --year 2025
 ```
 
 Output:
 ```
-╭─ Cost Estimate: FOMC Simulation ─────────────────────────────╮
-│                                                               │
-│  Model: Claude Opus 4.5 (claude-opus-4-5-20251101)           │
-│  Members: 12                                                  │
-│                                                               │
-│  Estimated Token Usage:                                       │
-│    Input:  ~120,000 tokens                                   │
-│    Output: ~36,000 tokens                                    │
-│                                                               │
-│  Estimated Cost: $4.50                                       │
-│                                                               │
-│  Note: Actual costs may vary based on response length.       │
-│                                                               │
-╰──────────────────────────────────────────────────────────────╯
+╭────────────────────── Anthropic API Cost Estimate ───────────────────────╮
+│ Cost Estimate                                                            │
+│                                                                          │
+│ Model: Opus 4.5 (claude-opus-4-5-20251101)                               │
+│ Members: 12                                                              │
+│                                                                          │
+│ Estimated tokens:                                                        │
+│   Input:  ~42,000 tokens                                                 │
+│   Output: ~21,600 tokens                                                 │
+│                                                                          │
+│ Estimated cost:                                                          │
+│   Input:  $0.630                                                         │
+│   Output: $1.620                                                         │
+│   Total:  $2.25                                                          │
+│                                                                          │
+│ * Actual costs may vary based on response length                         │
+│ * Use --members to estimate for specific members                         │
+╰──────────────────────────────────────────────────────────────────────────╯
+
+          Model Pricing (per 1M tokens)
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Model                   ┃ Input  ┃ Output  ┃ Est. Cost (12 memb.) ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ Opus 4.5 (current)      │ $15.00 │ $75.00  │ $2.25                │
+│ Sonnet 4                │ $3.00  │ $15.00  │ $0.45                │
+│ Haiku 3.5               │ $0.80  │ $4.00   │ $0.12                │
+└─────────────────────────┴────────┴─────────┴──────────────────────┘
 ```
 
 #### 2. Run the Simulation
@@ -252,6 +267,23 @@ uv run fed-board simulate --month 2025-01
 You'll be prompted to confirm the cost:
 
 ```
+╭────────────────────────── Anthropic API Cost ────────────────────────────╮
+│ Cost Estimate                                                            │
+│                                                                          │
+│ Model: Opus 4.5                                                          │
+│ Members: 12                                                              │
+│                                                                          │
+│ Estimated tokens:                                                        │
+│   Input:  ~42,000 tokens                                                 │
+│   Output: ~21,600 tokens                                                 │
+│                                                                          │
+│ Estimated cost:                                                          │
+│   Input:  $0.630                                                         │
+│   Output: $1.620                                                         │
+│   Total:  $2.25                                                          │
+│                                                                          │
+│ * Actual costs may vary based on response length                         │
+╰──────────────────────────────────────────────────────────────────────────╯
 Do you want to proceed with this simulation? [y/N]: y
 ```
 
@@ -261,6 +293,47 @@ To skip the confirmation (e.g., in scripts):
 uv run fed-board simulate --month 2025-01 --yes
 # or
 uv run fed-board simulate --month 2025-01 -y
+```
+
+**Simulation Output:**
+
+After running a simulation, you'll see economic indicators with **trend analysis** (↑ rising, ↓ falling, → stable) and historical context:
+
+```
+╭───────────────────────────── Fed Decision Board ─────────────────────────────╮
+│ FOMC Meeting Simulation                                                      │
+│                                                                              │
+│ Month: 2025-01                                                               │
+│ Members: All voting members (12)                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─────────────────── Economic Indicators (as of 2025-01-15) ───────────────────╮
+│ Inflation                                                                    │
+│   Core PCE: 2.8% ↓ (prev: 2.9, 3.0)                                          │
+│   CPI: 3.2% ↓ (prev: 3.4)  |  Core CPI: 3.3% ↓                               │
+│                                                                              │
+│ Labor Market                                                                 │
+│   Unemployment: 4.1% ↑ (prev: 4.0)                                           │
+│   Wage Growth: 4.0% ↓  |  Participation: 62.5% →                             │
+│                                                                              │
+│ Activity                                                                     │
+│   GDP Growth: +2.8% ↑ (prev: 2.1, 1.6)                                       │
+│   Retail Sales: +0.4% →  |  Industrial: +1.2% ↑                              │
+│                                                                              │
+│ Markets                                                                      │
+│   Fed Funds: 4.25-4.50%  |  10Y: 4.6% ↑  |  2Y: 4.3% →                       │
+│                                                                              │
+│ Expectations                                                                 │
+│   5Y Breakeven: 2.3% →  |  10Y Breakeven: 2.4% →  |  Sentiment: 74.0 ↑       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─────────────────────────────── Meeting Result ───────────────────────────────╮
+│ Decision: HOLD                                                               │
+│ New Target Range: 4.25-4.50%                                                 │
+│ Vote: Unanimous (12-0)                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Simulation saved to: data/simulations/2025-01.json
 ```
 
 #### 3. Generate Meeting Minutes
@@ -298,47 +371,46 @@ xdg-open data/minutes/2025-01.pdf
 | Command | Description | Example |
 |---------|-------------|---------|
 | `simulate` | Run FOMC meeting simulation | `uv run fed-board simulate --month 2025-01` |
-| `estimate` | Preview simulation cost without running | `uv run fed-board estimate --month 2025-01` |
+| `estimate` | Preview simulation cost without running | `uv run fed-board estimate --year 2025` |
 | `minutes` | Generate meeting minutes | `uv run fed-board minutes --month 2025-01 --format pdf` |
 | `dotplot` | Create rate projection dot plot | `uv run fed-board dotplot --year 2025` |
-| `press-conference` | Simulate Chair press conference | `uv run fed-board press-conference --month 2025-01` |
-| `dissents` | Analyze dissenting votes | `uv run fed-board dissents --year 2025` |
-| `compare` | Compare with actual Fed decision | `uv run fed-board compare --month 2025-01` |
 | `stance` | View hawk-dove positioning | `uv run fed-board stance --all` |
-| `impact` | Estimate market impact | `uv run fed-board impact --month 2025-01` |
-| `history` | View simulation history | `uv run fed-board history --year 2025` |
+| `cache clear` | Clear FRED API cache | `uv run fed-board cache clear` |
+| `cache stats` | View cache statistics | `uv run fed-board cache stats` |
 | `config show` | Display current configuration | `uv run fed-board config show` |
-| `config set` | Set configuration values | `uv run fed-board config set model opus` |
 
 ### Detailed Command Usage
 
 #### simulate
 
 ```bash
-# Full simulation (all 12 members)
+# Full simulation (all 12 voting members)
 uv run fed-board simulate --month 2025-01
 
-# Select specific members
-uv run fed-board simulate --month 2025-01 --members powell,waller,bowman,williams
+# Select specific members (faster & cheaper for testing)
+uv run fed-board simulate --month 2025-01 --members powell,waller,bowman
 
-# Verbose output
+# Verbose output (shows progress messages)
 uv run fed-board simulate --month 2025-01 --verbose
+
+# Debug mode (shows API call details)
+uv run fed-board simulate --month 2025-01 --debug
 
 # Skip cost confirmation
 uv run fed-board simulate --month 2025-01 --yes
 
-# Combined options
-uv run fed-board simulate --month 2025-01 --members powell,waller --verbose -y
+# Combined options (quick test)
+uv run fed-board simulate --month 2025-01 --members powell,waller -y --debug
 ```
 
 #### estimate
 
 ```bash
-# Estimate with default members
-uv run fed-board estimate --month 2025-01
+# Estimate for all voting members of a year
+uv run fed-board estimate --year 2025
 
 # Estimate with specific members (lower cost)
-uv run fed-board estimate --month 2025-01 --members powell,waller,bowman
+uv run fed-board estimate --members powell,waller,bowman
 ```
 
 #### minutes
@@ -364,14 +436,27 @@ uv run fed-board dotplot --year 2025
 uv run fed-board dotplot --year 2025 --output my-dotplot.png
 ```
 
-#### press-conference
+#### cache
 
 ```bash
-# Default (3 questions)
-uv run fed-board press-conference --month 2025-01
+# View cache statistics
+uv run fed-board cache stats
 
-# Custom number of questions
-uv run fed-board press-conference --month 2025-01 --questions 5
+# Clear all cached FRED data
+uv run fed-board cache clear
+```
+
+**Cache stats output:**
+```
+╭────────────────────────────── FRED Cache ────────────────────────────────╮
+│ Cache Statistics                                                         │
+│                                                                          │
+│ Directory: data/cache/fred                                               │
+│ Total files: 45                                                          │
+│ Total size: 128.5 KB                                                     │
+│ Valid entries: 42                                                        │
+│ Expired entries: 3                                                       │
+╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
 ---
@@ -392,16 +477,16 @@ Fed Decision Board uses Claude (Anthropic's AI) which charges per token:
 
 | Configuration | Estimated Cost |
 |---------------|----------------|
-| Full simulation (12 members, Opus) | $4-6 |
-| Full simulation (12 members, Sonnet) | $1-2 |
-| Partial simulation (4 members, Opus) | $1.50-2.50 |
-| Press conference (5 questions, Opus) | $0.50-1.00 |
+| Full simulation (12 members, Opus 4.5) | ~$2.25 |
+| Full simulation (12 members, Sonnet 4) | ~$0.45 |
+| Partial simulation (2 members, Opus 4.5) | ~$0.38 |
+| Partial simulation (4 members, Opus 4.5) | ~$0.75 |
 
 ### Cost Control Strategies
 
 1. **Always estimate first:**
    ```bash
-   uv run fed-board estimate --month 2025-01
+   uv run fed-board estimate --year 2025
    ```
 
 2. **Use fewer members for testing:**
@@ -737,5 +822,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/fed-decision-board/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/fed-decision-board/discussions)
+- **Issues:** [GitHub Issues](https://github.com/marcosgabbardo/fed-decision-board/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/marcosgabbardo/fed-decision-board/discussions)
