@@ -53,12 +53,11 @@ dmypy.json
 .env.local
 .env.*.local
 
-# Data directories (keep structure, ignore contents)
-data/cache/
-data/simulations/*.json
-data/minutes/*.md
-data/minutes/*.pdf
-data/dotplots/*.png
+# Data directories (generated files)
+data/
+
+# Generated images at root
+*.png
 
 # OS
 .DS_Store
