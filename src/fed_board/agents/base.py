@@ -242,47 +242,85 @@ class FOMCAgent:
             longer_run=proj_data.get("longer_run", 2.5),
         )
 
-    async def _call_api(self, user_message: str) -> str:
+    async def _call_api(
+        self,
+        user_message: str,
+        max_retries: int = 5,
+        base_delay: float = 10.0,
+    ) -> str:
         """
         Call the Anthropic API with the given message.
 
+        Includes automatic retry with exponential backoff for rate limits.
+
         Args:
             user_message: The user message to send
+            max_retries: Maximum number of retries for rate limit errors
+            base_delay: Base delay in seconds for exponential backoff
 
         Returns:
             The assistant's response text
         """
+        import asyncio
+        import random
+
         messages = self._conversation_history + [{"role": "user", "content": user_message}]
 
         if self.debug:
             logger.debug(f"[{self.short_name}] Calling API with model={self.model}")
             logger.debug(f"[{self.short_name}] Message length: {len(user_message)} chars")
 
-        start_time = time.time()
+        last_error = None
 
-        try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=2000,
-                system=self.system_prompt,
-                messages=messages,
-            )
+        for attempt in range(max_retries + 1):
+            start_time = time.time()
 
-            elapsed = time.time() - start_time
-
-            if self.debug:
-                usage = response.usage
-                logger.debug(
-                    f"[{self.short_name}] API response in {elapsed:.1f}s - "
-                    f"input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}"
+            try:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=2000,
+                    system=self.system_prompt,
+                    messages=messages,
                 )
 
-            return response.content[0].text
+                elapsed = time.time() - start_time
 
-        except anthropic.APIError as e:
-            elapsed = time.time() - start_time
-            logger.error(f"[{self.short_name}] API error after {elapsed:.1f}s: {e}")
-            raise FOMCAgentError(f"API call failed for {self.name}: {e}") from e
+                if self.debug:
+                    usage = response.usage
+                    logger.debug(
+                        f"[{self.short_name}] API response in {elapsed:.1f}s - "
+                        f"input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}"
+                    )
+
+                return response.content[0].text
+
+            except anthropic.RateLimitError as e:
+                elapsed = time.time() - start_time
+                last_error = e
+
+                if attempt < max_retries:
+                    # Exponential backoff with jitter
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 5)
+                    logger.warning(
+                        f"[{self.short_name}] Rate limit hit after {elapsed:.1f}s. "
+                        f"Retry {attempt + 1}/{max_retries} in {delay:.1f}s..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        f"[{self.short_name}] Rate limit error after {max_retries} retries: {e}"
+                    )
+                    raise FOMCAgentError(
+                        f"API rate limit exceeded for {self.name} after {max_retries} retries: {e}"
+                    ) from e
+
+            except anthropic.APIError as e:
+                elapsed = time.time() - start_time
+                logger.error(f"[{self.short_name}] API error after {elapsed:.1f}s: {e}")
+                raise FOMCAgentError(f"API call failed for {self.name}: {e}") from e
+
+        # This shouldn't be reached, but just in case
+        raise FOMCAgentError(f"API call failed for {self.name}: {last_error}")
 
     def _extract_json(self, text: str) -> dict[str, Any] | None:
         """
