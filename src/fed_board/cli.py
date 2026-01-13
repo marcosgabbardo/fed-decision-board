@@ -892,7 +892,7 @@ def cache_cmd(
             Panel(
                 f"[bold]Cache Statistics[/bold]\n\n"
                 f"Directory: {stats['cache_dir']}\n"
-                f"Total files: {stats['total_files']}\n"
+                f"Total entries: {stats['total_entries']}\n"
                 f"Total size: {stats['total_size_bytes'] / 1024:.1f} KB\n"
                 f"Valid entries: {stats['valid_entries']}\n"
                 f"Expired entries: {stats['expired_entries']}",
