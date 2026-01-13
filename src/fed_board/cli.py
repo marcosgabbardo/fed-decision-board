@@ -1179,8 +1179,19 @@ def _calculate_stance_score(
     preferred_rate: float,
     decision_rate_lower: float,
     decision_rate_upper: float,
+    preferred_rate_change: float | None = None,
 ) -> int:
-    """Calculate stance score for a single vote (-100 to +100)."""
+    """Calculate stance score for a single vote (-100 to +100).
+
+    Uses preferred_rate_change if available (more accurate),
+    otherwise falls back to comparing preferred vs decision rate.
+    """
+    # If we have the explicit rate change preference, use it directly
+    if preferred_rate_change is not None and preferred_rate_change != 0:
+        # Normalize: +/-50 bps = +/-100 score
+        return int(max(-100, min(100, preferred_rate_change * 2)))
+
+    # Fall back to rate comparison
     actual_mid = (decision_rate_lower + decision_rate_upper) / 2
     delta_bps = (preferred_rate - actual_mid) * 100
     # Normalize: max delta of 50 bps = score of 100
@@ -1234,6 +1245,11 @@ def stance(
     member_data: dict[str, dict] = {}
 
     for sim in simulations:
+        # Build a lookup for vote_preferences by member name
+        vote_pref_by_name = {
+            vp.member.name: vp for vp in sim.vote_preferences
+        } if sim.vote_preferences else {}
+
         for vote in sim.votes:
             name = vote.member_name
             if name not in member_data:
@@ -1251,19 +1267,26 @@ def stance(
                     "scores": [],
                     "dissents": 0,
                     "months": [],
+                    "vote_preferences": [],
                 }
+
+            # Get the vote preference if available
+            vote_pref = vote_pref_by_name.get(name)
+            preferred_rate_change = vote_pref.preferred_rate_change if vote_pref else None
 
             # Calculate score for this vote
             score = _calculate_stance_score(
                 vote.preferred_rate,
                 sim.decision.new_rate_lower,
                 sim.decision.new_rate_upper,
+                preferred_rate_change,
             )
 
             member_data[name]["votes"].append(vote)
             member_data[name]["decisions"].append(sim.decision)
             member_data[name]["scores"].append(score)
             member_data[name]["months"].append(sim.meeting.month_str)
+            member_data[name]["vote_preferences"].append(vote_pref)
             if vote.is_dissent:
                 member_data[name]["dissents"] += 1
 
