@@ -1723,5 +1723,180 @@ def compare(
         console.print(f"[bold {score_color}]Accuracy Score: {score}%[/bold {score_color}]")
 
 
+@app.command()
+def votes(
+    month: Annotated[
+        str,
+        typer.Option(
+            "--month",
+            "-m",
+            help="Meeting month in YYYY-MM format",
+        ),
+    ],
+    member: Annotated[
+        Optional[str],
+        typer.Option(
+            "--member",
+            help="Filter by member name (short name like 'powell', 'bowman')",
+        ),
+    ] = None,
+    brief: Annotated[
+        bool,
+        typer.Option(
+            "--brief",
+            "-b",
+            help="Show brief output (no reasoning)",
+        ),
+    ] = False,
+) -> None:
+    """Show detailed voting information from a simulation."""
+    from fed_board.agents.orchestrator import MeetingOrchestrator
+    from fed_board.agents.personas import FOMC_MEMBERS
+    from fed_board.config import get_settings
+    from fed_board.models.member import Stance
+
+    settings = get_settings()
+    orchestrator = MeetingOrchestrator(settings)
+
+    # Load the simulation
+    result = orchestrator.load_result(month)
+    if not result:
+        console.print(f"[red]No simulation found for {month}. Run 'simulate' first.[/red]")
+        raise typer.Exit(1)
+
+    # Build lookup for vote_preferences by member name
+    vote_pref_by_name = {
+        vp.member.name: vp for vp in result.vote_preferences
+    } if result.vote_preferences else {}
+
+    # Build lookup for FOMC members
+    fomc_by_name = {m.name: m for m in FOMC_MEMBERS}
+
+    # Filter by member if specified
+    votes_to_show = result.votes
+    if member:
+        member_lower = member.lower()
+        # Find matching member
+        target_name = None
+        for m in FOMC_MEMBERS:
+            if m.short_name.lower() == member_lower or member_lower in m.name.lower():
+                target_name = m.name
+                break
+
+        if not target_name:
+            console.print(f"[red]Member '{member}' not found.[/red]")
+            console.print("Available members:")
+            for m in FOMC_MEMBERS:
+                console.print(f"  {m.short_name}: {m.name}")
+            raise typer.Exit(1)
+
+        votes_to_show = [v for v in result.votes if v.member_name == target_name]
+
+    # Header
+    decision = result.decision
+    if decision.rate_change_bps > 0:
+        decision_str = f"RAISE +{decision.rate_change_bps}bps"
+        decision_color = "red"
+    elif decision.rate_change_bps < 0:
+        decision_str = f"CUT {decision.rate_change_bps}bps"
+        decision_color = "green"
+    else:
+        decision_str = "HOLD"
+        decision_color = "yellow"
+
+    console.print()
+    console.print(Panel(
+        f"[bold]Decision:[/bold] [{decision_color}]{decision_str}[/{decision_color}]\n"
+        f"[bold]Rate:[/bold] {decision.previous_rate_range_str} → {decision.rate_range_str}\n"
+        f"[bold]Vote:[/bold] {result.vote_summary}",
+        title=f"FOMC Meeting — {month}",
+        border_style="blue",
+    ))
+
+    # Show each vote
+    for vote in votes_to_show:
+        name = vote.member_name
+        fomc_member = fomc_by_name.get(name)
+        vote_pref = vote_pref_by_name.get(name)
+
+        # Stance color
+        if fomc_member:
+            stance_color = {
+                Stance.HAWK: "red",
+                Stance.DOVE: "green",
+                Stance.NEUTRAL: "yellow",
+            }.get(fomc_member.stance, "white")
+            stance_str = f"[{stance_color}]{fomc_member.stance.value.capitalize()}[/{stance_color}]"
+        else:
+            stance_str = "?"
+
+        # Vote decision
+        if vote.vote_for_decision:
+            vote_str = "[green]FOR[/green]"
+        else:
+            vote_str = "[red]AGAINST[/red]"
+
+        # Preferred rate
+        if vote_pref:
+            if vote_pref.preferred_rate_change > 0:
+                pref_str = f"[red]+{vote_pref.preferred_rate_change:.0f}bps[/red]"
+            elif vote_pref.preferred_rate_change < 0:
+                pref_str = f"[green]{vote_pref.preferred_rate_change:.0f}bps[/green]"
+            else:
+                pref_str = "[yellow]Hold[/yellow]"
+            confidence = vote_pref.confidence
+            confidence_bar = "█" * int(confidence * 10) + "░" * (10 - int(confidence * 10))
+        else:
+            pref_str = f"{vote.preferred_rate:.2f}%"
+            confidence = 0.0
+            confidence_bar = "░" * 10
+
+        console.print()
+
+        # Member header
+        role_str = ""
+        if fomc_member:
+            role_str = f" ({fomc_member.role.value})"
+
+        console.print(f"[bold cyan]{name}[/bold cyan]{role_str}")
+        console.print(f"  Stance: {stance_str}  |  Vote: {vote_str}  |  Preferred: {pref_str}")
+        console.print(f"  Confidence: {confidence_bar} {confidence:.0%}")
+
+        if not brief and vote_pref:
+            # Key factors
+            if vote_pref.key_factors:
+                console.print(f"  [bold]Key Factors:[/bold]")
+                for factor in vote_pref.key_factors[:5]:
+                    console.print(f"    • {factor}")
+
+            # Reasoning (truncated)
+            if vote_pref.reasoning:
+                reasoning = vote_pref.reasoning
+                # Show first 300 chars
+                if len(reasoning) > 300:
+                    reasoning = reasoning[:300] + "..."
+                console.print(f"  [bold]Reasoning:[/bold]")
+                # Word wrap
+                import textwrap
+                wrapped = textwrap.fill(reasoning, width=70, initial_indent="    ", subsequent_indent="    ")
+                console.print(f"[dim]{wrapped}[/dim]")
+
+    # Summary stats
+    if len(votes_to_show) > 1:
+        for_count = sum(1 for v in votes_to_show if v.vote_for_decision)
+        against_count = len(votes_to_show) - for_count
+
+        console.print()
+        console.print(f"[dim]─" * 60 + "[/dim]")
+        console.print(f"[bold]Summary:[/bold] {for_count} for, {against_count} against")
+
+        if result.vote_preferences:
+            avg_confidence = sum(
+                vp.confidence for vp in result.vote_preferences
+                if vp.member.name in [v.member_name for v in votes_to_show]
+            ) / len(votes_to_show)
+            console.print(f"[bold]Average Confidence:[/bold] {avg_confidence:.0%}")
+
+
 if __name__ == "__main__":
     app()
