@@ -216,6 +216,9 @@ class MeetingOrchestrator:
         """
         Formulate the Chair's proposal based on member preferences.
 
+        The Fed operates in standard 25 bps increments, so the proposal
+        must align with this convention.
+
         Returns:
             Tuple of (proposal text, proposed rate midpoint)
         """
@@ -224,14 +227,15 @@ class MeetingOrchestrator:
         rates.sort()
         median_rate = rates[len(rates) // 2]
 
-        # Round to nearest 0.25
-        proposed_rate = round(median_rate * 4) / 4
-
         current_lower = indicators.markets.fed_funds_target_lower or 5.0
         current_upper = indicators.markets.fed_funds_target_upper or 5.25
         current_mid = (current_lower + current_upper) / 2
 
-        change_bps = int((proposed_rate - current_mid) * 100)
+        # Calculate the change needed and round to standard 25 bps increments
+        raw_change_bps = (median_rate - current_mid) * 100
+        # Round to nearest 25 bps increment (Fed convention)
+        change_bps = int(round(raw_change_bps / 25) * 25)
+        proposed_rate = current_mid + (change_bps / 100)
 
         if change_bps > 0:
             action = f"raise the target range by {change_bps} basis points"
@@ -285,6 +289,17 @@ The Committee will continue to monitor incoming data and remains prepared to adj
             rate_decision = RateDecision.CUT
         else:
             rate_decision = RateDecision.HOLD
+
+        # Update dissent status based on FINAL decision, not initial proposal
+        # A member is a dissenter if their preferred rate differs from the final decision
+        for vote in votes:
+            vote_agrees_with_decision = abs(vote.preferred_rate - new_mid) < 0.01
+            vote.is_dissent = not vote_agrees_with_decision
+            # Update vote_for_decision to reflect agreement with final decision
+            vote.vote_for_decision = vote_agrees_with_decision
+            # Clear dissent_reason if they now agree with the decision
+            if not vote.is_dissent:
+                vote.dissent_reason = None
 
         return Decision(
             rate_decision=rate_decision,
