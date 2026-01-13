@@ -1089,5 +1089,263 @@ def changes(
         console.print(f"[yellow]Notable:[/yellow] {', '.join(notable_changes[:3])}")
 
 
+@app.command()
+def compare(
+    month: Annotated[
+        Optional[str],
+        typer.Option(
+            "--month",
+            "-m",
+            help="Meeting month to compare (YYYY-MM)",
+        ),
+    ] = None,
+    year: Annotated[
+        Optional[int],
+        typer.Option(
+            "--year",
+            "-y",
+            help="Compare all meetings in a year",
+        ),
+    ] = None,
+) -> None:
+    """Compare simulation results with actual Fed decisions."""
+    from fed_board.agents.orchestrator import MeetingOrchestrator
+    from fed_board.config import get_settings
+    from fed_board.data.fomc_schedule import (
+        get_fomc_meeting_date,
+        get_fomc_months,
+        is_fomc_month,
+    )
+    from fed_board.data.fred import FREDClient
+    from fed_board.data.historical_decisions import (
+        get_actual_decision,
+    )
+
+    settings = get_settings()
+    orchestrator = MeetingOrchestrator(settings=settings)
+    fred_client = FREDClient(settings=settings)
+
+    if year is not None:
+        # Compare all meetings in a year
+        fomc_months = get_fomc_months(year)
+        if not fomc_months:
+            console.print(f"[red]No FOMC meeting data for {year}.[/red]")
+            raise typer.Exit(1)
+
+        results = []
+        for m in fomc_months:
+            meeting_date = get_fomc_meeting_date(m)
+            if meeting_date and meeting_date > datetime.now().date():
+                continue  # Skip future meetings
+
+            sim_result = orchestrator.load_result(m)
+            if sim_result is None:
+                continue
+
+            actual = asyncio.run(get_actual_decision(fred_client, meeting_date))
+            if actual is None:
+                continue
+
+            # Calculate accuracy
+            sim_decision = sim_result.decision
+            direction_match = (
+                (sim_decision.rate_change_bps > 0 and actual.change_bps > 0) or
+                (sim_decision.rate_change_bps < 0 and actual.change_bps < 0) or
+                (sim_decision.rate_change_bps == 0 and actual.change_bps == 0)
+            )
+            magnitude_error = abs(sim_decision.rate_change_bps - actual.change_bps)
+
+            results.append({
+                "month": m,
+                "sim_type": sim_decision.rate_decision.value,
+                "sim_bps": sim_decision.rate_change_bps,
+                "actual_type": actual.decision_type,
+                "actual_bps": actual.change_bps,
+                "direction_match": direction_match,
+                "magnitude_error": magnitude_error,
+            })
+
+        if not results:
+            console.print(f"[yellow]No simulations found for {year} FOMC meetings.[/yellow]")
+            raise typer.Exit(1)
+
+        # Display summary table
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Meeting", style="cyan")
+        table.add_column("Simulation", justify="center")
+        table.add_column("Actual", justify="center")
+        table.add_column("Match", justify="center")
+        table.add_column("Error", justify="right")
+
+        direction_correct = 0
+        total_error = 0
+
+        for r in results:
+            # Format simulation result
+            if r["sim_bps"] > 0:
+                sim_str = f"RAISE +{r['sim_bps']}"
+            elif r["sim_bps"] < 0:
+                sim_str = f"CUT {r['sim_bps']}"
+            else:
+                sim_str = "HOLD"
+
+            # Format actual result
+            if r["actual_bps"] > 0:
+                actual_str = f"RAISE +{r['actual_bps']}"
+            elif r["actual_bps"] < 0:
+                actual_str = f"CUT {r['actual_bps']}"
+            else:
+                actual_str = "HOLD"
+
+            # Match indicator
+            if r["direction_match"]:
+                match_str = "[green]✓[/green]"
+                direction_correct += 1
+            else:
+                match_str = "[red]✗[/red]"
+
+            # Error
+            error_str = f"{r['magnitude_error']} bps" if r["magnitude_error"] > 0 else "-"
+            total_error += r["magnitude_error"]
+
+            table.add_row(r["month"], sim_str, actual_str, match_str, error_str)
+
+        console.print()
+        console.print(Panel(
+            f"Comparing {len(results)} FOMC meetings in {year}",
+            title=f"Accuracy Summary — {year}",
+            border_style="cyan",
+        ))
+        console.print()
+        console.print(table)
+
+        # Summary statistics
+        accuracy_pct = (direction_correct / len(results)) * 100 if results else 0
+        avg_error = total_error / len(results) if results else 0
+
+        console.print()
+        console.print(f"[bold]Direction Accuracy:[/bold] {direction_correct}/{len(results)} ({accuracy_pct:.0f}%)")
+        console.print(f"[bold]Average Error:[/bold] {avg_error:.1f} bps")
+
+    else:
+        # Compare single meeting
+        if month is None:
+            # Use most recent simulation
+            simulations_dir = settings.simulations_dir
+            if not simulations_dir.exists():
+                console.print("[red]No simulations found. Run 'simulate' first.[/red]")
+                raise typer.Exit(1)
+
+            sim_files = sorted(simulations_dir.glob("*.json"), reverse=True)
+            if not sim_files:
+                console.print("[red]No simulations found. Run 'simulate' first.[/red]")
+                raise typer.Exit(1)
+
+            month = sim_files[0].stem
+
+        # Check if it's an FOMC month
+        if not is_fomc_month(month):
+            console.print(f"[yellow]No FOMC meeting in {month}.[/yellow]")
+            year_num = int(month.split("-")[0])
+            available_months = get_fomc_months(year_num)
+            if available_months:
+                console.print(f"[dim]FOMC meetings in {year_num}: {', '.join(available_months)}[/dim]")
+            raise typer.Exit(1)
+
+        meeting_date = get_fomc_meeting_date(month)
+
+        # Check if meeting is in the future
+        if meeting_date and meeting_date > datetime.now().date():
+            console.print(f"[yellow]Cannot compare: {month} meeting hasn't occurred yet.[/yellow]")
+            console.print(f"[dim]Meeting date: {meeting_date.strftime('%B %d, %Y')}[/dim]")
+            raise typer.Exit(1)
+
+        # Load simulation
+        sim_result = orchestrator.load_result(month)
+        if sim_result is None:
+            console.print(f"[red]No simulation found for {month}. Run 'simulate --month {month}' first.[/red]")
+            raise typer.Exit(1)
+
+        # Fetch actual decision
+        console.print("[dim]Fetching actual Fed decision from FRED...[/dim]")
+        actual = asyncio.run(get_actual_decision(fred_client, meeting_date))
+
+        if actual is None:
+            console.print(f"[yellow]Could not fetch actual Fed decision for {month}.[/yellow]")
+            raise typer.Exit(1)
+
+        sim_decision = sim_result.decision
+
+        # Calculate metrics
+        direction_match = (
+            (sim_decision.rate_change_bps > 0 and actual.change_bps > 0) or
+            (sim_decision.rate_change_bps < 0 and actual.change_bps < 0) or
+            (sim_decision.rate_change_bps == 0 and actual.change_bps == 0)
+        )
+        magnitude_error = abs(sim_decision.rate_change_bps - actual.change_bps)
+        range_match = (
+            abs(sim_decision.new_rate_lower - actual.rate_lower) < 0.01 and
+            abs(sim_decision.new_rate_upper - actual.rate_upper) < 0.01
+        )
+
+        # Calculate score
+        score = 0
+        if direction_match:
+            score += 50
+        if magnitude_error == 0:
+            score += 30
+        elif magnitude_error <= 25:
+            score += 15
+        if range_match:
+            score += 20
+
+        # Build comparison table
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("", style="dim")
+        table.add_column("Simulation", justify="center")
+        table.add_column("Actual Fed", justify="center")
+        table.add_column("Match", justify="center")
+
+        # Decision type
+        sim_type = sim_decision.rate_decision.value
+        actual_type = actual.decision_type
+        type_match = "[green]✓[/green]" if sim_type == actual_type else "[red]✗[/red]"
+        table.add_row("Decision", sim_type, actual_type, type_match)
+
+        # Change in bps
+        sim_change = f"{sim_decision.rate_change_bps:+d} bps"
+        actual_change = f"{actual.change_bps:+d} bps"
+        change_match = "[green]✓[/green]" if magnitude_error == 0 else f"[yellow]{magnitude_error} bps off[/yellow]"
+        table.add_row("Change", sim_change, actual_change, change_match)
+
+        # New range
+        sim_range = sim_decision.rate_range_str
+        actual_range = actual.rate_range_str
+        range_match_str = "[green]✓[/green]" if range_match else "[red]✗[/red]"
+        table.add_row("New Range", sim_range, actual_range, range_match_str)
+
+        # Header panel
+        console.print()
+        console.print(Panel(
+            f"[bold]FOMC Meeting:[/bold] {meeting_date.strftime('%B %d, %Y')}",
+            title=f"Simulation vs Actual — {month}",
+            border_style="blue",
+        ))
+
+        # Table
+        console.print()
+        console.print(table)
+
+        # Score
+        console.print()
+        if score >= 80:
+            score_color = "green"
+        elif score >= 50:
+            score_color = "yellow"
+        else:
+            score_color = "red"
+        console.print(f"[bold {score_color}]Accuracy Score: {score}%[/bold {score_color}]")
+
+
 if __name__ == "__main__":
     app()
