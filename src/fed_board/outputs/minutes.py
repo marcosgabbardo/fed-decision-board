@@ -1,9 +1,11 @@
-"""Meeting minutes generator in Fed format."""
+"""Meeting minutes generator in official Fed format."""
 
 from pathlib import Path
 
+from fed_board.agents.personas import FOMC_MEMBERS, get_voting_members
 from fed_board.config import Settings, get_settings
 from fed_board.models.meeting import MeetingResult
+from fed_board.models.member import Role
 
 
 class MinutesGenerator:
@@ -20,207 +22,458 @@ class MinutesGenerator:
 
     def generate_markdown(self, result: MeetingResult) -> str:
         """
-        Generate meeting minutes in Markdown format.
+        Generate meeting minutes in Markdown format matching Fed official style.
 
         Args:
             result: The meeting result to generate minutes for
 
         Returns:
-            Markdown string
+            Markdown string in official Fed minutes format
         """
         meeting = result.meeting
         decision = result.decision
+        year = meeting.meeting_date.year
 
-        # Build the vote tally
-        vote_list = self._format_vote_list(result)
-        dissent_section = self._format_dissent_section(result)
+        # Build the opening paragraph
+        opening = self._build_opening_paragraph(meeting)
+
+        # Build sections
+        financial_markets = self._build_financial_markets_section(result)
+        staff_economic = self._build_staff_economic_section(result)
+        staff_financial = self._build_staff_financial_section(result)
+        staff_outlook = self._build_staff_outlook_section(result)
+        participants_views = self._build_participants_views_section(result)
+        policy_actions = self._build_policy_actions_section(result)
+        voting_section = self._build_voting_section(result)
+        attendance_section = self._build_attendance_section(year)
 
         markdown = f"""# Minutes of the Federal Open Market Committee
-
 ## {meeting.display_date}
 
-A joint meeting of the Federal Open Market Committee and the Board of Governors of the Federal Reserve System was held in the offices of the Board of Governors on {meeting.display_date}.
-
----
+{opening}
 
 ## Developments in Financial Markets and Open Market Operations
 
-The manager of the System Open Market Account reported on developments in domestic and foreign financial markets during the period since the Committee met previously. Financial conditions remained broadly stable, with market participants attentive to incoming economic data and Federal Reserve communications.
-
-Treasury yields {self._describe_yield_movement(result)} as markets adjusted expectations for the path of monetary policy. The S&P 500 index {self._describe_equity_movement(result)} over the intermeeting period.
-
----
+{financial_markets}
 
 ## Staff Review of the Economic Situation
 
-{result.economic_outlook}
+{staff_economic}
 
-### Inflation
+## Staff Review of the Financial Situation
 
-The staff's assessment indicated that inflation remained {self._describe_inflation_status(result)} percent on a 12-month basis. Core inflation, which excludes food and energy prices, continued to run above the Committee's 2 percent longer-run objective.
-
-### Labor Market
-
-Labor market conditions remained {self._describe_labor_market(result)}. The unemployment rate held near historically low levels, while payroll gains continued at a solid pace. Wage growth remained elevated but showed signs of gradual moderation.
-
-### Economic Activity
-
-Real GDP growth continued at a moderate pace. Consumer spending remained resilient, supported by a strong labor market and household balance sheets. Business fixed investment showed mixed signals, with equipment spending softening while structures investment held steady.
-
----
+{staff_financial}
 
 ## Staff Economic Outlook
 
-The staff's projection for the U.S. economy continued to anticipate a period of below-trend growth followed by a gradual return to trend. The projection incorporated the assumption that financial conditions would remain generally supportive of growth.
-
-The staff continued to judge that the risks to the baseline projection for real activity were tilted to the downside, while the risks to the inflation projection were tilted to the upside. The possibility that inflation could prove more persistent than expected remained a key concern.
-
----
+{staff_outlook}
 
 ## Participants' Views on Current Conditions and the Economic Outlook
 
-In their discussion of current conditions and the economic outlook, participants noted that recent indicators suggested that economic activity had been expanding at a solid pace.
+{participants_views}
 
-{result.participants_discussion}
+## Committee Policy Actions
 
-### Assessment of Inflation
+{policy_actions}
 
-Participants generally agreed that inflation remained elevated relative to the Committee's 2 percent objective. {self._generate_inflation_discussion(result)}
-
-### Labor Market Conditions
-
-Participants observed that the labor market remained tight, with demand for workers still exceeding available supply in many sectors. {self._generate_labor_discussion(result)}
-
-### Policy Considerations
-
-{self._generate_policy_discussion(result)}
+{voting_section}
 
 ---
 
-## Committee Policy Action
-
-{result.statement_summary}
-
-{vote_list}
-
-{dissent_section}
+{attendance_section}
 
 ---
 
-## Voting
+_______________________
 
-Voting for this action: {self._get_for_voters(result)}
-
-{self._get_dissent_voters(result)}
+Secretary of the Federal Open Market Committee
 
 ---
 
-*Minutes prepared by the staff of the Federal Open Market Committee*
+**AI-GENERATED SIMULATION NOTICE**
 
----
+This document was generated by an AI simulation system (Fed Decision Board) using {result.model_used} and does not represent actual Federal Reserve decisions, policy, or official communications. The content is produced for educational, research, and analytical purposes only. Any resemblance to actual FOMC deliberations is simulated based on publicly available information about member positions and economic conditions.
 
-**DISCLAIMER: AI-GENERATED SIMULATION**
-
-This document was generated by an AI simulation system and does not represent actual Federal Reserve decisions or policy. The content is for educational and research purposes only.
-
-**Model Used:** {result.model_used}
-
-**Generated:** {result.created_at.strftime('%Y-%m-%d %H:%M:%S')}
-
-*Fed Decision Board - AI-powered FOMC meeting simulator*
+*Generated: {result.created_at.strftime('%B %d, %Y at %H:%M:%S')}*
 """
         return markdown
 
-    def _format_vote_list(self, result: MeetingResult) -> str:
-        """Format the vote tally."""
-        decision = result.decision
-        if decision.rate_change_bps > 0:
-            action = f"raise the target range by {decision.rate_change_bps} basis points"
-        elif decision.rate_change_bps < 0:
-            action = f"lower the target range by {abs(decision.rate_change_bps)} basis points"
-        else:
-            action = "maintain the target range"
-
-        return f"""The Committee decided to {action}, establishing the target range for the federal funds rate at {decision.rate_range_str}."""
-
-    def _format_dissent_section(self, result: MeetingResult) -> str:
-        """Format the dissent analysis section."""
-        if not result.has_dissents:
-            return ""
-
-        sections = ["### Dissenting Views\n"]
-        for analysis in result.dissent_analyses:
-            sections.append(
-                f"**{analysis.dissenter_name}** voted against the action, preferring "
-                f"{analysis.dissenter_preference}. {analysis.reasoning}\n"
+    def _build_opening_paragraph(self, meeting) -> str:
+        """Build the official opening paragraph."""
+        if meeting.meeting_end_date:
+            start_date = meeting.meeting_date.strftime("%A, %B %d, %Y")
+            end_date = meeting.meeting_end_date.strftime("%A, %B %d, %Y")
+            return (
+                f"A joint meeting of the Federal Open Market Committee and the Board of "
+                f"Governors of the Federal Reserve System was held in the offices of the "
+                f"Board of Governors on {start_date}, at 10:00 a.m. and continued on "
+                f"{end_date}, at 9:00 a.m.¹"
             )
-        return "\n".join(sections)
+        else:
+            date_str = meeting.meeting_date.strftime("%A, %B %d, %Y")
+            return (
+                f"A joint meeting of the Federal Open Market Committee and the Board of "
+                f"Governors of the Federal Reserve System was held in the offices of the "
+                f"Board of Governors on {date_str}, at 10:00 a.m.¹"
+            )
 
-    def _get_for_voters(self, result: MeetingResult) -> str:
-        """Get list of members who voted for the decision."""
-        voters = [v.member_name for v in result.votes if v.vote_for_decision]
-        return ", ".join(voters)
+    def _build_financial_markets_section(self, result: MeetingResult) -> str:
+        """Build the financial markets and open market operations section."""
+        impact = result.market_impact
 
-    def _get_dissent_voters(self, result: MeetingResult) -> str:
-        """Get dissent information."""
-        dissenters = [v for v in result.votes if v.is_dissent]
-        if not dissenters:
-            return ""
+        # Describe treasury movements
+        if impact:
+            if impact.treasury_10y_change_bps > 5:
+                treasury_desc = "increased modestly"
+            elif impact.treasury_10y_change_bps < -5:
+                treasury_desc = "declined"
+            else:
+                treasury_desc = "were little changed, on net,"
 
-        lines = ["\nVoting against this action:"]
-        for vote in dissenters:
-            lines.append(f"- {vote.member_name} (preferred {vote.preferred_rate:.2f}%)")
+            if impact.sp500_change_pct > 1:
+                equity_desc = "advanced"
+            elif impact.sp500_change_pct < -1:
+                equity_desc = "declined"
+            else:
+                equity_desc = "were little changed, on net,"
+        else:
+            treasury_desc = "remained within recent ranges"
+            equity_desc = "were little changed, on net,"
+
+        return f"""The manager turned first to an overview of broad market developments during the intermeeting period. Market participants continued to interpret incoming economic data as consistent with a resilient economy. Investors' expectations for the path of the policy rate were attentive to evolving economic conditions and Federal Reserve communications.
+
+The manager turned next to developments in Treasury markets. Treasury yields {treasury_desc} over the intermeeting period. Market-based measures of inflation compensation showed modest movements, reflecting market participants' assessments of the inflation outlook and monetary policy expectations.
+
+Broad equity price indexes {equity_desc} over the intermeeting period. Equity prices showed sensitivity to economic data releases and policymaker communications. Corporate credit spreads remained at relatively tight levels, suggesting continued investor confidence in corporate credit quality.
+
+Regarding international developments, the trade-weighted dollar index showed modest movements over the intermeeting period. Foreign central bank policy expectations continued to evolve in response to global economic conditions.
+
+By unanimous vote, the Committee ratified the Desk's domestic transactions over the intermeeting period. There were no intervention operations in foreign currencies for the System's account during the intermeeting period."""
+
+    def _build_staff_economic_section(self, result: MeetingResult) -> str:
+        """Build the staff review of economic situation section."""
+        outlook_text = result.economic_outlook if result.economic_outlook else ""
+
+        paragraphs = []
+
+        paragraphs.append(
+            "The information available at the time of the meeting indicated that "
+            "economic activity had continued to expand. Labor market conditions remained "
+            "solid, with payroll gains continuing and the unemployment rate staying at "
+            "historically low levels. Consumer price inflation remained above the "
+            "Committee's 2 percent longer-run objective."
+        )
+
+        if outlook_text:
+            paragraphs.append(outlook_text)
+
+        paragraphs.append(
+            "The unemployment rate remained at low levels by historical standards. "
+            "The pace of payroll employment gains continued at a solid rate. Other "
+            "available labor market indicators—such as initial claims for unemployment "
+            "insurance benefits, rates of job openings and layoffs, and survey measures "
+            "of labor market conditions—were consistent with a labor market that remained "
+            "tight but was gradually coming into better balance."
+        )
+
+        paragraphs.append(
+            "Total consumer price inflation—as measured by the 12-month change in the "
+            "price index for personal consumption expenditures (PCE)—remained above the "
+            "Committee's 2 percent objective. Core PCE price inflation, which excludes "
+            "changes in consumer energy prices and many consumer food prices, also "
+            "remained elevated relative to the Committee's goal."
+        )
+
+        return "\n\n".join(paragraphs)
+
+    def _build_staff_financial_section(self, result: MeetingResult) -> str:
+        """Build the staff review of financial situation section."""
+        return """Over the intermeeting period, nominal Treasury yields showed modest movements as market participants assessed incoming economic data and implications for monetary policy. Changes in nominal yields reflected movements in both real yields and inflation compensation.
+
+In domestic credit markets, conditions remained generally supportive for businesses and households. Financing conditions were somewhat restrictive for some borrowers, particularly in sectors sensitive to interest rates. Large businesses continued to access credit markets at a solid pace.
+
+Credit performance remained stable in most markets. Delinquency rates for consumer loans remained elevated in some categories but showed signs of stabilization. Commercial real estate credit conditions continued to warrant close monitoring given the ongoing adjustments in that sector.
+
+Bank lending standards remained somewhat tight across most loan categories, while loan demand showed mixed signals. Market-based financing remained available for investment-grade borrowers at favorable terms."""
+
+    def _build_staff_outlook_section(self, result: MeetingResult) -> str:
+        """Build the staff economic outlook section."""
+        return """The staff projection for the U.S. economy anticipated continued moderate growth in real GDP. The projection incorporated the assumption that financial conditions would remain generally supportive of economic expansion while monetary policy worked to bring inflation back to the Committee's 2 percent objective.
+
+The staff's inflation forecast anticipated a gradual return toward the Committee's 2 percent longer-run objective, although the path was expected to be uneven. Core inflation was projected to moderate as supply and demand conditions continued to come into better balance.
+
+The staff continued to judge that uncertainty around the baseline projection remained elevated. Risks around the forecast for real activity were seen as roughly balanced. Risks around the inflation forecast remained tilted to the upside, given the possibility that inflation could prove more persistent than expected."""
+
+    def _build_participants_views_section(self, result: MeetingResult) -> str:
+        """Build the participants' views section in impersonal Fed style."""
+        decision = result.decision
+
+        # Analyze vote preferences to determine sentiment distribution
+        hawk_count = sum(
+            1 for v in result.vote_preferences
+            if v.preferred_rate_change > 0 or "inflation" in v.reasoning.lower()
+        )
+        dove_count = sum(
+            1 for v in result.vote_preferences
+            if v.preferred_rate_change < 0 or "employment" in v.reasoning.lower()
+        )
+
+        paragraphs = []
+
+        # Opening observation - economic activity
+        paragraphs.append(
+            "In their discussion of current conditions and the economic outlook, "
+            "participants noted that recent indicators suggested that economic activity "
+            "had continued to expand at a solid pace. Several participants observed that "
+            "consumer spending remained resilient, supported by solid labor income growth "
+            "and household balance sheets. A few participants noted that business fixed "
+            "investment had shown mixed signals, with strength in some sectors offset by "
+            "weakness in others."
+        )
+
+        # Inflation discussion - varies based on hawk/dove balance
+        if hawk_count > dove_count:
+            inflation_text = (
+                "Participants observed that inflation remained above the Committee's "
+                "2 percent objective. Most participants noted concerns about the persistence "
+                "of elevated inflation and emphasized the importance of returning inflation "
+                "to the Committee's goal in a timely manner. Several participants observed "
+                "that while headline inflation had moderated somewhat, core inflation "
+                "remained elevated, particularly in services categories. A few participants "
+                "noted that the pace of disinflation had slowed in recent months."
+            )
+        elif dove_count > hawk_count:
+            inflation_text = (
+                "Participants observed that inflation remained somewhat above the "
+                "Committee's 2 percent objective but had continued to moderate. Several "
+                "participants noted that the disinflation process was proceeding broadly "
+                "as expected, with goods prices declining and services inflation gradually "
+                "easing. A few participants observed that longer-term inflation expectations "
+                "remained well anchored, which supported the view that inflation would "
+                "continue to move toward the Committee's goal."
+            )
+        else:
+            inflation_text = (
+                "Participants observed that inflation remained above the Committee's "
+                "2 percent objective. Most participants noted that while inflation had "
+                "moved down from its peak, the pace of disinflation had been uneven. "
+                "Several participants emphasized the importance of remaining vigilant "
+                "about inflation risks, while others noted that progress toward the "
+                "inflation objective was continuing."
+            )
+        paragraphs.append(inflation_text)
+
+        # Labor market discussion
+        paragraphs.append(
+            "With regard to the labor market, participants observed that conditions "
+            "remained solid. Several participants noted that labor demand and supply "
+            "had continued to come into better balance, as evidenced by a moderation "
+            "in job openings and a gradual uptick in the unemployment rate from very "
+            "low levels. Participants generally agreed that the labor market remained "
+            "strong by historical standards but was no longer contributing to "
+            "inflationary pressures to the same degree as in the past."
+        )
+
+        # Economic outlook and risks
+        paragraphs.append(
+            "In discussing the outlook, participants generally expected that, with "
+            "an appropriate stance of monetary policy, inflation would continue to move "
+            "toward the Committee's 2 percent objective while the labor market remained "
+            "solid. Participants noted that uncertainty about the economic outlook "
+            "remained elevated. Several participants emphasized that risks to the outlook "
+            "were roughly balanced, while a few participants judged that downside risks "
+            "to employment had increased or that upside risks to inflation remained."
+        )
+
+        # Policy discussion based on decision
+        if decision.rate_change_bps > 0:
+            policy_text = (
+                "In their consideration of monetary policy at this meeting, "
+                "participants judged that it would be appropriate to raise the target "
+                "range for the federal funds rate. Most participants agreed that "
+                "elevated inflation warranted a continued restrictive stance of "
+                "monetary policy. Several participants noted that the Committee "
+                "should remain prepared to adjust policy as needed based on incoming "
+                "data. A few participants expressed the view that the Committee should "
+                "be attentive to the risk of tightening too much."
+            )
+        elif decision.rate_change_bps < 0:
+            policy_text = (
+                "In their consideration of monetary policy at this meeting, "
+                "participants agreed that inflation had made progress toward the "
+                "Committee's 2 percent objective and that risks to achieving the "
+                "Committee's employment and inflation goals had moved into better "
+                "balance. Most participants supported lowering the target range for "
+                "the federal funds rate at this meeting. Several participants noted "
+                "that a reduction in policy restraint was appropriate given the "
+                "progress on inflation and the current level of rates. A few "
+                "participants expressed the view that the Committee should proceed "
+                "cautiously in reducing policy restraint."
+            )
+        else:
+            policy_text = (
+                "In their consideration of monetary policy at this meeting, "
+                "participants generally agreed that the current stance of monetary "
+                "policy remained appropriate. Most participants noted that it would "
+                "be prudent to maintain the current level of the federal funds rate "
+                "while continuing to assess incoming data. Several participants "
+                "emphasized that the Committee should remain data dependent and "
+                "prepared to adjust policy as warranted. A few participants noted "
+                "the importance of clearly communicating the Committee's reaction "
+                "function to the public."
+            )
+        paragraphs.append(policy_text)
+
+        return "\n\n".join(paragraphs)
+
+    def _build_policy_actions_section(self, result: MeetingResult) -> str:
+        """Build the committee policy actions section."""
+        decision = result.decision
+        statement = result.statement_summary if result.statement_summary else ""
+
+        # Determine the action description
+        if decision.rate_change_bps > 0:
+            action_desc = f"raise the target range for the federal funds rate by {decision.rate_change_bps} basis points"
+        elif decision.rate_change_bps < 0:
+            action_desc = f"lower the target range for the federal funds rate by {abs(decision.rate_change_bps)} basis points"
+        else:
+            action_desc = "maintain the target range for the federal funds rate"
+
+        paragraphs = []
+
+        paragraphs.append(
+            "In their discussions of monetary policy for this meeting, members "
+            "agreed that economic activity had continued to expand. They also agreed "
+            "that job gains had remained solid and that the unemployment rate had "
+            "stayed at low levels. Members observed that inflation remained above "
+            "the Committee's 2 percent longer-run goal."
+        )
+
+        paragraphs.append(
+            f"Members agreed that the Committee remained strongly committed to "
+            f"returning inflation to its 2 percent objective while supporting maximum "
+            f"employment. In support of these goals, members agreed to {action_desc}, "
+            f"to {decision.rate_range_str}."
+        )
+
+        if statement:
+            paragraphs.append(statement)
+
+        paragraphs.append(
+            "Members agreed that, in assessing the appropriate stance of monetary "
+            "policy, the Committee would continue to monitor the implications of "
+            "incoming information for the economic outlook. The Committee would be "
+            "prepared to adjust the stance of monetary policy as appropriate if "
+            "risks emerged that could impede the attainment of the Committee's goals."
+        )
+
+        return "\n\n".join(paragraphs)
+
+    def _build_voting_section(self, result: MeetingResult) -> str:
+        """Build the voting section with member names."""
+        decision = result.decision
+
+        # Get voters for and against
+        for_voters = [v.member_name for v in result.votes if v.vote_for_decision]
+        against_voters = [v for v in result.votes if not v.vote_for_decision]
+
+        lines = []
+        if for_voters:
+            lines.append(f"**Voting for this action:** {'; '.join(for_voters)}.")
+        else:
+            lines.append("**Voting for this action:** None.")
+
+        if against_voters:
+            against_names = []
+            for v in against_voters:
+                if v.preferred_rate > decision.new_rate_upper:
+                    reason = "who preferred to raise rates further"
+                elif v.preferred_rate < decision.new_rate_lower:
+                    reason = "who preferred a larger rate reduction"
+                else:
+                    reason = "who preferred a different policy action"
+                against_names.append(f"{v.member_name}, {reason}")
+
+            lines.append(f"\n**Voting against this action:** {'; '.join(against_names)}.")
+        else:
+            lines.append("\n**Voting against this action:** None.")
+
         return "\n".join(lines)
 
-    def _describe_yield_movement(self, result: MeetingResult) -> str:
-        """Describe treasury yield movements."""
-        impact = result.market_impact
-        if impact is None:
-            return "remained relatively stable"
-        if impact.treasury_10y_change_bps > 5:
-            return "increased"
-        elif impact.treasury_10y_change_bps < -5:
-            return "decreased"
-        return "remained relatively stable"
+    def _build_attendance_section(self, year: int) -> str:
+        """Build the attendance section listing all participants."""
+        # Separate members by role
+        chair = None
+        vice_chair = None
+        vice_chair_supervision = None
+        governors = []
+        ny_president = None
+        voting_presidents = []
+        non_voting_presidents = []
 
-    def _describe_equity_movement(self, result: MeetingResult) -> str:
-        """Describe equity market movements."""
-        impact = result.market_impact
-        if impact is None:
-            return "remained relatively stable"
-        if impact.sp500_change_pct > 1:
-            return "advanced"
-        elif impact.sp500_change_pct < -1:
-            return "declined"
-        return "remained relatively stable"
+        for member in FOMC_MEMBERS:
+            if member.role == Role.CHAIR:
+                chair = member
+            elif member.role == Role.VICE_CHAIR:
+                vice_chair = member
+            elif member.role == Role.VICE_CHAIR_SUPERVISION:
+                vice_chair_supervision = member
+            elif member.role == Role.GOVERNOR:
+                governors.append(member)
+            elif member.role == Role.PRESIDENT:
+                if "New York" in member.bank:
+                    ny_president = member
+                elif member.is_voting_in_year(year):
+                    voting_presidents.append(member)
+                else:
+                    non_voting_presidents.append(member)
 
-    def _describe_inflation_status(self, result: MeetingResult) -> str:
-        """Describe inflation status."""
-        return "elevated"  # Simplified - would ideally use actual data
+        lines = ["## Attendance", ""]
 
-    def _describe_labor_market(self, result: MeetingResult) -> str:
-        """Describe labor market conditions."""
-        return "tight but gradually normalizing"
+        # Chair and Vice Chairs
+        if chair:
+            lines.append(f"{chair.name}, Chair")
+        if vice_chair:
+            lines.append(f"{vice_chair.name}, Vice Chair")
+        if vice_chair_supervision:
+            lines.append(f"{vice_chair_supervision.name}, Vice Chair for Supervision")
 
-    def _generate_inflation_discussion(self, result: MeetingResult) -> str:
-        """Generate inflation discussion based on vote preferences."""
-        hawk_count = sum(1 for v in result.vote_preferences if "inflation" in v.reasoning.lower())
-        if hawk_count > len(result.vote_preferences) / 2:
-            return "Several participants expressed concern about the persistence of inflation and stressed the importance of bringing it back to target in a timely manner."
-        return "While inflation remained elevated, several participants noted progress in recent months and expressed cautious optimism about the disinflation process."
+        # Governors
+        if governors:
+            gov_names = ", ".join([g.name for g in governors])
+            lines.append(f"{gov_names}, Governors")
 
-    def _generate_labor_discussion(self, result: MeetingResult) -> str:
-        """Generate labor market discussion."""
-        return "Some participants noted that labor market conditions, while still tight, had shown signs of coming into better balance between supply and demand."
+        lines.append("")
 
-    def _generate_policy_discussion(self, result: MeetingResult) -> str:
-        """Generate policy discussion based on the decision."""
-        decision = result.decision
-        if decision.rate_change_bps > 0:
-            return "In their consideration of policy, participants generally agreed that the stance of monetary policy remained restrictive and that further increases in the target range were warranted to bring inflation back to 2 percent."
-        elif decision.rate_change_bps < 0:
-            return "In their consideration of policy, participants generally agreed that with inflation continuing to moderate and the risks becoming more balanced, it was appropriate to begin the process of normalizing the stance of monetary policy."
-        return "In their consideration of policy, participants generally agreed that the current stance of monetary policy remained appropriate given the economic outlook and the balance of risks."
+        # NY Fed President
+        if ny_president:
+            lines.append(f"{ny_president.name}, President, Federal Reserve Bank of New York")
+
+        # Voting Reserve Bank Presidents
+        if voting_presidents:
+            lines.append("")
+            lines.append("*Voting Reserve Bank Presidents:*")
+            for pres in voting_presidents:
+                bank_name = pres.bank.replace("Federal Reserve Bank of ", "")
+                lines.append(f"{pres.name}, President, {bank_name}")
+
+        # Non-voting Reserve Bank Presidents
+        if non_voting_presidents:
+            lines.append("")
+            lines.append("*Alternate Members of the Committee:*")
+            alt_names = ", ".join([p.name for p in non_voting_presidents[:4]])
+            lines.append(alt_names)
+
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        lines.append(
+            "¹ This AI simulation represents a hypothetical FOMC meeting based on the "
+            "economic conditions and member characteristics as of the simulation date. "
+            "Attendance reflects the current FOMC composition."
+        )
+
+        return "\n".join(lines)
 
     def save_markdown(
         self,

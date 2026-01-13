@@ -152,7 +152,12 @@ class FOMCAgent:
         if vote_data is None:
             raise FOMCAgentError(f"Failed to parse vote response from {self.name}")
 
-        vote_for = vote_data.get("vote", "").lower() == "for"
+        # Parse vote - accept various affirmative phrasings
+        vote_str = vote_data.get("vote", "").lower()
+        vote_for = any(
+            phrase in vote_str
+            for phrase in ["for", "yes", "in favor", "support", "approve", "agree"]
+        ) and "against" not in vote_str
         preferred_lower = vote_data.get("preferred_rate_lower", current_rate_lower)
         preferred_upper = vote_data.get("preferred_rate_upper", current_rate_upper)
 
