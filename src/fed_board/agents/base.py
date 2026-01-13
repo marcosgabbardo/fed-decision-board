@@ -1,11 +1,13 @@
 """Base FOMC agent class for interacting with Claude."""
 
+import asyncio
 import json
 import logging
 import os
+import random
 import re
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import anthropic
 
@@ -32,6 +34,24 @@ class FOMCAgentError(Exception):
 
 class FOMCAgent:
     """An AI agent representing an FOMC member."""
+
+    # Class-level semaphore to limit concurrent API calls across all agents
+    # This prevents rate limit errors when running many agents in parallel
+    _api_semaphore: ClassVar[asyncio.Semaphore | None] = None
+    _max_concurrent_calls: ClassVar[int] = 3  # Max concurrent API calls
+
+    @classmethod
+    def _get_semaphore(cls) -> asyncio.Semaphore:
+        """Get or create the shared API semaphore."""
+        if cls._api_semaphore is None:
+            cls._api_semaphore = asyncio.Semaphore(cls._max_concurrent_calls)
+        return cls._api_semaphore
+
+    @classmethod
+    def set_max_concurrent_calls(cls, max_calls: int) -> None:
+        """Set the maximum number of concurrent API calls."""
+        cls._max_concurrent_calls = max_calls
+        cls._api_semaphore = None  # Reset to recreate with new limit
 
     def __init__(
         self,
@@ -252,6 +272,7 @@ class FOMCAgent:
         Call the Anthropic API with the given message.
 
         Includes automatic retry with exponential backoff for rate limits.
+        Uses a class-level semaphore to limit concurrent API calls (default: 3).
 
         Args:
             user_message: The user message to send
@@ -261,43 +282,55 @@ class FOMCAgent:
         Returns:
             The assistant's response text
         """
-        import asyncio
-        import random
-
         messages = self._conversation_history + [{"role": "user", "content": user_message}]
+        semaphore = self._get_semaphore()
 
         if self.debug:
-            logger.debug(f"[{self.short_name}] Calling API with model={self.model}")
-            logger.debug(f"[{self.short_name}] Message length: {len(user_message)} chars")
+            logger.debug(f"[{self.short_name}] Waiting for API slot...")
 
-        last_error = None
+        last_error: Exception | None = None
+        elapsed = 0.0
 
         for attempt in range(max_retries + 1):
-            start_time = time.time()
-
-            try:
-                response = await self.client.messages.create(
-                    model=self.model,
-                    max_tokens=2000,
-                    system=self.system_prompt,
-                    messages=messages,
-                )
-
-                elapsed = time.time() - start_time
-
+            # Acquire semaphore to limit concurrent calls
+            async with semaphore:
                 if self.debug:
-                    usage = response.usage
-                    logger.debug(
-                        f"[{self.short_name}] API response in {elapsed:.1f}s - "
-                        f"input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}"
+                    logger.debug(f"[{self.short_name}] Calling API with model={self.model}")
+                    logger.debug(f"[{self.short_name}] Message length: {len(user_message)} chars")
+
+                start_time = time.time()
+
+                try:
+                    response = await self.client.messages.create(
+                        model=self.model,
+                        max_tokens=2000,
+                        system=self.system_prompt,
+                        messages=messages,
                     )
 
-                return response.content[0].text
+                    elapsed = time.time() - start_time
 
-            except anthropic.RateLimitError as e:
-                elapsed = time.time() - start_time
-                last_error = e
+                    if self.debug:
+                        usage = response.usage
+                        logger.debug(
+                            f"[{self.short_name}] API response in {elapsed:.1f}s - "
+                            f"input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}"
+                        )
 
+                    return response.content[0].text
+
+                except anthropic.RateLimitError as e:
+                    elapsed = time.time() - start_time
+                    last_error = e
+                    # Continue to retry logic below
+
+                except anthropic.APIError as e:
+                    elapsed = time.time() - start_time
+                    logger.error(f"[{self.short_name}] API error after {elapsed:.1f}s: {e}")
+                    raise FOMCAgentError(f"API call failed for {self.name}: {e}") from e
+
+            # Outside semaphore block - wait before retrying (only for rate limits)
+            if last_error is not None:
                 if attempt < max_retries:
                     # Exponential backoff with jitter
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 5)
@@ -306,18 +339,14 @@ class FOMCAgent:
                         f"Retry {attempt + 1}/{max_retries} in {delay:.1f}s..."
                     )
                     await asyncio.sleep(delay)
+                    last_error = None  # Reset for next attempt
                 else:
                     logger.error(
-                        f"[{self.short_name}] Rate limit error after {max_retries} retries: {e}"
+                        f"[{self.short_name}] Rate limit error after {max_retries} retries: {last_error}"
                     )
                     raise FOMCAgentError(
-                        f"API rate limit exceeded for {self.name} after {max_retries} retries: {e}"
-                    ) from e
-
-            except anthropic.APIError as e:
-                elapsed = time.time() - start_time
-                logger.error(f"[{self.short_name}] API error after {elapsed:.1f}s: {e}")
-                raise FOMCAgentError(f"API call failed for {self.name}: {e}") from e
+                        f"API rate limit exceeded for {self.name} after {max_retries} retries: {last_error}"
+                    ) from last_error
 
         # This shouldn't be reached, but just in case
         raise FOMCAgentError(f"API call failed for {self.name}: {last_error}")
